@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>文本编辑器圆角与倒角融合选择特效</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['"Fira Code"', 'monospace'],
+            sans: ['Inter', 'sans-serif'],
+          },
+          colors: {
+            editor: {
+              bg: '#0f1117',
+              panel: '#161922',
+              border: '#232736',
+              lineHighlight: '#1a1f2c',
+              gutter: '#4a5068',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* 屏蔽原生高亮，完全由底层融合SVG驱动 */
+    ::selection {
+      background: transparent;
+      color: inherit;
+    }
+    ::-moz-selection {
+      background: transparent;
+      color: inherit;
+    }
+
+    /* 文本层设置确保指针事件穿透到文本选择 */
+    .editor-text-layer {
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    /* 平滑过渡 */
+    .transition-shape {
+      transition: d 0.12s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.15s ease;
+    }
+
+    /* 自定义滚动条 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 17, 23, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #2a3143;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #3b455e;
+    }
+
+    /* 局部微光动画 */
+    @keyframes pulseGlow {
+      0%, 100% { opacity: 0.88; }
+      50% { opacity: 1; }
+    }
+    .animate-pulse-glow {
+      animation: pulseGlow 3s ease-in-out infinite;
+    }
+  </style>
+</head>
+<body class="bg-[#0b0d13] text-slate-200 font-sans min-h-screen flex flex-col selection:bg-transparent overflow-x-hidden">
+
+  <header class="border-b border-editor-border bg-editor-panel/90 backdrop-blur sticky top-0 z-40 px-6 py-3.5 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+        <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-sm font-semibold tracking-wide text-white flex items-center gap-2">
+          Rounded & Fillet Text Selection
+          <span class="text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 rounded-full font-mono">倒角融合特效</span>
+        </h1>
+        <p class="text-xs text-slate-400">上下行重叠处自动生成平滑内圆角（倒角）与连续外圆角</p>
+      </div>
+    </div>
+
+    <!-- Quick Presets -->
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-slate-400 font-medium mr-1">快捷测试:</span>
+      <button onclick="applyPreset('multi-stair')" class="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-600 transition flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-cyan-400"></span>多行交错 (推荐)
+      </button>
+      <button onclick="applyPreset('code-block')" class="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-600 transition">
+        函数块选择
+      </button>
+      <button onclick="applyPreset('single-word')" class="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-600 transition">
+        单行胶囊
+      </button>
+      <button onclick="clearCustomSelection()" class="px-2.5 py-1 text-xs rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 transition">
+        清除选区
+      </button>
+    </div>
+  </header>
+
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+    
+    <!-- Left Column: Code Editor Viewport (8 Cols) -->
+    <section class="lg:col-span-8 flex flex-col rounded-xl overflow-hidden border border-editor-border bg-editor-bg shadow-2xl shadow-black/60 relative">
+      <!-- Editor Window Header -->
+      <div class="bg-editor-panel px-4 py-2.5 flex items-center justify-between border-b border-editor-border">
+        <div class="flex items-center gap-2">
+          <div class="flex gap-1.5 mr-2">
+            <span class="w-3 h-3 rounded-full bg-rose-500/80 inline-block"></span>
+            <span class="w-3 h-3 rounded-full bg-amber-500/80 inline-block"></span>
+            <span class="w-3 h-3 rounded-full bg-emerald-500/80 inline-block"></span>
+          </div>
+          <div class="px-3 py-1 rounded-t bg-editor-bg border-t border-x border-editor-border/80 text-xs font-mono text-cyan-300 flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+            TextSelectionFusion.tsx
+          </div>
+        </div>
+        <div class="text-[11px] font-mono text-slate-500 flex items-center gap-3">
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 实时交互模式: 自由拖拽划词</span>
+          <span>UTF-8</span>
+          <span>TypeScript</span>
+        </div>
+      </div>
+
+      <div class="relative w-full overflow-x-auto min-h-[440px]" id="editorViewport">
+        <!-- SVG Selection Highlight Layer (Underneath the text) -->
+        <svg id="selectionSvgOverlay" class="absolute inset-0 pointer-events-none z-10 w-full h-full overflow-visible" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <!-- 渐变填充 1: 概念图中的深空微光蓝 -->
+            <linearGradient id="selectionGradPrimary" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.38" />
+              <stop offset="100%" stop-color="#2563eb" stop-opacity="0.28" />
+            </linearGradient>
+
+            <!-- 渐变边框描边 -->
+            <linearGradient id="selectionStrokeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#7dd3fc" stop-opacity="0.75" />
+              <stop offset="100%" stop-color="#60a5fa" stop-opacity="0.45" />
+            </linearGradient>
+
+            <!-- 柔和外发光滤镜 -->
+            <filter id="selectionGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#38bdf8" flood-opacity="0.32"/>
+              <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#60a5fa" flood-opacity="0.4"/>
+            </filter>
+
+            <!-- 流体 Gooey 滤镜 (可选模式) -->
+            <filter id="liquidGooFilter">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
+              <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 24 -11" result="goo" />
+              <feBlend in="SourceGraphic" in2="goo" />
+            </filter>
+          </defs>
+
+          <!-- 主路径：几何倒角融合形状 -->
+          <g id="selectionGlowGroup" filter="url(#selectionGlow)">
+            <path id="selectionPathBg" class="transition-shape animate-pulse-glow" fill="url(#selectionGradPrimary)" />
+            <path id="selectionPathStroke" class="transition-shape" fill="none" stroke="url(#selectionStrokeGrad)" stroke-width="1.25" stroke-linejoin="round" />
+          </g>
+
+          <!-- 倒角与外圆角指示标记组 (调试视觉标注) -->
+          <g id="selectionAnnotationGroup" class="transition-opacity duration-200"></g>
+        </svg>
+
+        <!-- Editor Content (Gutter + Text lines) -->
+        <div class="flex font-mono text-sm leading-7 py-5 select-text relative z-20" id="editorContent">
+          <!-- Line Numbers Gutter -->
+          <div class="w-12 select-none text-right pr-4 text-editor-gutter font-mono text-xs select-none border-r border-editor-border/40 flex flex-col" id="gutterCol">
+            <span>12</span>
+            <span>13</span>
+            <span>14</span>
+            <span>15</span>
+            <span>16</span>
+            <span>17</span>
+            <span>18</span>
+            <span>19</span>
+            <span>20</span>
+          </div>
+
+          <!-- Code Lines Container (contenteditable or plain selectable) -->
+          <div class="flex-1 pl-4 pr-6 editor-text-layer text-slate-300 outline-none" id="textLayer" spellcheck="false">
+            <div class="line" data-line="12"><span class="text-purple-400">const</span> <span class="text-yellow-300">fluidSelection</span> = <span class="text-blue-400">new</span> <span class="text-emerald-400">MergedFilletEngine</span>({</div>
+            <div class="line" data-line="13">&nbsp;&nbsp;<span class="text-slate-400">cornerRadius:</span> <span class="text-amber-300">12</span>, <span class="text-slate-500">// 外圆角</span></div>
+            <div class="line" data-line="14">&nbsp;&nbsp;<span class="text-slate-400">filletRadius:</span> <span class="text-cyan-300">14</span>, <span class="text-slate-500">// 上下行重叠处的平滑倒角融合</span></div>
+            <div class="line" data-line="15">&nbsp;&nbsp;<span class="text-slate-400">renderMode:</span> <span class="text-green-300">'concave-arc-fusion'</span>,</div>
+            <div class="line" data-line="16">&nbsp;&nbsp;<span class="text-slate-400">smoothing:</span> <span class="text-purple-300">0.85</span>,</div>
+            <div class="line" data-line="17">});</div>
+            <div class="line" data-line="18"><span class="text-slate-500">// 尝试用鼠标自由划选以上任意多行文字体验倒角过渡效果</span></div>
+            <div class="line" data-line="19"><span class="text-blue-400">export default</span> <span class="text-yellow-300">fluidSelection</span>.<span class="text-cyan-300">renderOverlay</span>();</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Editor Footer Status Bar -->
+      <div class="bg-editor-panel/90 px-4 py-2 text-xs border-t border-editor-border text-slate-400 flex items-center justify-between font-mono">
+        <div class="flex items-center gap-4">
+          <span id="statLinesCount">行数: 0 行</span>
+          <span id="statCharsCount">已选: 0 字符</span>
+          <span id="statRectsCount" class="text-cyan-400">生成多边形节点: 0</span>
+        </div>
+        <div class="flex items-center gap-3 text-[11px]">
+          <span class="text-slate-500">提示: 支持跨行反选、局部拖拽</span>
+        </div>
+      </div>
+    </section>
+
+    <aside class="lg:col-span-4 flex flex-col gap-5">
+      
+      <!-- Panel 1: Parameter Tuning -->
+      <div class="bg-editor-panel rounded-xl border border-editor-border p-5 shadow-lg">
+        <h2 class="text-xs font-semibold text-white tracking-wider uppercase flex items-center gap-2 mb-4">
+          <svg class="w-4 h-4 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          核心倒角与形态参数
+        </h2>
+
+        <!-- Slider 1: Corner Radius (Outer) -->
+        <div class="mb-4">
+          <div class="flex justify-between text-xs mb-1.5">
+            <span class="text-slate-300 font-medium">外圆角半径 (Outer Corner)</span>
+            <span id="valRadius" class="font-mono text-cyan-400">10 px</span>
+          </div>
+          <input type="range" id="inputRadius" min="2" max="22" value="10" 
+                 class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-400">
+          <span class="text-[11px] text-slate-500 mt-0.5 block">控制行首行尾的外向凸圆角</span>
+        </div>
+
+        <!-- Slider 2: Fillet Radius (Inner concave) -->
+        <div class="mb-4">
+          <div class="flex justify-between text-xs mb-1.5">
+            <span class="text-slate-300 font-medium">内倒角融合半径 (Inner Fillet)</span>
+            <span id="valFillet" class="font-mono text-cyan-400">12 px</span>
+          </div>
+          <input type="range" id="inputFillet" min="2" max="24" value="12" 
+                 class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-400">
+          <span class="text-[11px] text-slate-500 mt-0.5 block">控制上下两行阶梯交界处的凹向平滑倒角</span>
+        </div>
+
+        <!-- Slider 3: Vertical Bleed / Extension -->
+        <div class="mb-4">
+          <div class="flex justify-between text-xs mb-1.5">
+            <span class="text-slate-300 font-medium">行间垂直重叠膨胀 (Vertical Bleed)</span>
+            <span id="valBleed" class="font-mono text-cyan-400">2 px</span>
+          </div>
+          <input type="range" id="inputBleed" min="0" max="6" value="2" 
+                 class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-400">
+          <span class="text-[11px] text-slate-500 mt-0.5 block">消除行间缝隙并加深倒角自然连接</span>
+        </div>
+
+        <!-- Theme Color Selector -->
+        <div class="pt-3 border-t border-editor-border/80">
+          <label class="text-xs text-slate-300 font-medium block mb-2">流光色彩方案</label>
+          <div class="grid grid-cols-4 gap-2">
+            <button onclick="setSelectionTheme('cyan')" class="h-8 rounded-lg border-2 border-cyan-400/80 bg-gradient-to-r from-cyan-500/30 to-blue-500/30 flex items-center justify-center text-[11px] text-cyan-200 font-medium">微光蓝</button>
+            <button onclick="setSelectionTheme('purple')" class="h-8 rounded-lg border border-purple-500/40 bg-gradient-to-r from-purple-500/20 to-pink-500/20 flex items-center justify-center text-[11px] text-purple-200 font-medium hover:border-purple-400">霓虹紫</button>
+            <button onclick="setSelectionTheme('emerald')" class="h-8 rounded-lg border border-emerald-500/40 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 flex items-center justify-center text-[11px] text-emerald-200 font-medium hover:border-emerald-400">极光绿</button>
+            <button onclick="setSelectionTheme('amber')" class="h-8 rounded-lg border border-amber-500/40 bg-gradient-to-r from-amber-500/20 to-orange-500/20 flex items-center justify-center text-[11px] text-amber-200 font-medium hover:border-amber-400">暮色金</button>
+          </div>
+        </div>
+
+        <!-- Width Mode Selector (Wrap Content vs Match Parent) -->
+        <div class="mt-4 pt-3 border-t border-editor-border/80">
+          <label class="text-xs text-slate-300 font-medium block mb-2">选区宽度模式 (Width Mode)</label>
+          <div class="grid grid-cols-2 gap-2 p-1 bg-slate-900/80 rounded-lg border border-editor-border">
+            <button id="btnModeWrap" onclick="setWidthMode('wrap')" 
+                    class="py-1.5 px-3 rounded-md text-xs font-medium transition bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h14"/></svg>
+              紧贴内容 (Wrap Content)
+            </button>
+            <button id="btnModeParent" onclick="setWidthMode('parent')" 
+                    class="py-1.5 px-3 rounded-md text-xs font-medium transition text-slate-400 hover:text-slate-200 flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
+              通栏整行 (Match Parent)
+            </button>
+          </div>
+          <span class="text-[11px] text-slate-500 mt-1.5 block">紧贴内容模式下，行末紧随实际文字结尾，不再向右无限延展</span>
+        </div>
+
+        <!-- Toggle: Show Fillet & Corner Annotations -->
+        <div class="mt-4 pt-3 border-t border-editor-border/80 flex items-center justify-between">
+          <span class="text-xs text-slate-300">显示几何标注 (外圆角 / 倒角圈)</span>
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" id="toggleAnnotations" checked class="sr-only peer">
+            <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-500"></div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Panel 2: Live Macro Zoom Inspector (放大镜分解图) -->
+      <div class="bg-editor-panel rounded-xl border border-editor-border p-5 shadow-lg">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-xs font-semibold text-white tracking-wider uppercase flex items-center gap-1.5">
+            <svg class="w-4 h-4 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            倒角重叠区域解构示意
+          </h2>
+          <span class="text-[10px] font-mono text-cyan-400 px-1.5 py-0.5 rounded bg-cyan-950/60 border border-cyan-800">Vector Math</span>
+        </div>
+        <p class="text-xs text-slate-400 mb-3 leading-relaxed">
+          当第 N 行选区宽于或窄于第 N+1 行时，重叠垂直交线处向内生成顺滑曲线（内倒角），消灭生硬直角：
+        </p>
+
+        <!-- Diagram SVG illustration -->
+        <div class="w-full bg-[#0d0f15] rounded-lg p-3 border border-editor-border/60 flex items-center justify-center">
+          <svg class="w-full h-36" viewBox="0 0 320 140" fill="none">
+            <!-- Top line rect mock -->
+            <path d="M 40 30 H 260 Q 275 30 275 45 V 65 Q 275 75 260 75 H 175 Q 165 75 165 85 V 105 Q 165 115 150 115 H 40 Q 25 115 25 100 V 45 Q 25 30 40 30 Z" 
+                  fill="rgba(56, 189, 248, 0.2)" stroke="#38bdf8" stroke-width="1.5" />
+            
+            <!-- Dashed reference line showing original square stairs -->
+            <path d="M 275 65 V 75 H 165 V 85" stroke="#ef4444" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>
+            
+            <!-- Annotation Circles -->
+            <circle cx="165" cy="75" r="14" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="2 2" fill="rgba(56,189,248,0.1)"/>
+            <text x="186" y="80" fill="#38bdf8" font-size="10" font-family="Inter" font-weight="600">重叠交界内倒角 (Fillet)</text>
+            
+            <circle cx="275" cy="30" r="10" stroke="#a78bfa" stroke-width="1.2" stroke-dasharray="2 2" fill="none"/>
+            <text x="220" y="20" fill="#c084fc" font-size="10" font-family="Inter">行末外圆角</text>
+
+            <circle cx="25" cy="115" r="10" stroke="#a78bfa" stroke-width="1.2" stroke-dasharray="2 2" fill="none"/>
+            <text x="35" y="132" fill="#c084fc" font-size="10" font-family="Inter">行首外圆角</text>
+          </svg>
+        </div>
+        <div class="mt-3 text-[11px] text-slate-400 space-y-1">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+            <span><strong>内倒角 (Fillet Arc):</strong> 采用二阶贝塞尔或圆弧切向逼近</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+            <span><strong>外凸角 (Outer Corner):</strong> 保持行头与行尾胶囊圆润感</span>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <script>
+    /**
+     * Rounded & Merged Text Selection Fusion Engine
+     * 核心算法：
+     * 1. 拦截 window.getSelection() 提取 Range 的所有 clientRects。
+     * 2. 按行垂直空间分组 (Line Clustering)，合并行内零散 Rect 为单行整块 [left, right, top, bottom]。
+     * 3. 沿多行外轮廓逆时针/顺时针闭合追踪形成直角正交多边形。
+     * 4. 遍历多边形折角，判断其为凸角(Convex -> 外圆角) 还是凹角(Concave/Reflex -> 内倒角)。
+     * 5. 为所有拐点插入带切线控制的贝塞尔圆弧指令 `Q` 或 `A`，输出为单一无缝 SVG Path。
+     */
+
+    // 默认配置
+    const config = {
+      cornerRadius: 10,  // 外圆角
+      filletRadius: 12,  // 内倒角
+      verticalBleed: 2,  // 上下重叠膨胀 (px)
+      horizontalPadding: 3, // 左右外扩呼吸间距 (px)
+      showAnnotations: true,
+      theme: 'cyan',
+      widthMode: 'wrap' // 'wrap' (紧贴文字内容) 或 'parent' (整行撑满)
+    };
+
+    // DOM 元素引用
+    const editorViewport = document.getElementById('editorViewport');
+    const textLayer = document.getElementById('textLayer');
+    const selectionPathBg = document.getElementById('selectionPathBg');
+    const selectionPathStroke = document.getElementById('selectionPathStroke');
+    const selectionAnnotationGroup = document.getElementById('selectionAnnotationGroup');
+    const statLinesCount = document.getElementById('statLinesCount');
+    const statCharsCount = document.getElementById('statCharsCount');
+    const statRectsCount = document.getElementById('statRectsCount');
+
+    // UI 控件绑定
+    const inputRadius = document.getElementById('inputRadius');
+    const inputFillet = document.getElementById('inputFillet');
+    const inputBleed = document.getElementById('inputBleed');
+    const valRadius = document.getElementById('valRadius');
+    const valFillet = document.getElementById('valFillet');
+    const valBleed = document.getElementById('valBleed');
+    const toggleAnnotations = document.getElementById('toggleAnnotations');
+
+    inputRadius.addEventListener('input', (e) => {
+      config.cornerRadius = parseInt(e.target.value);
+      valRadius.textContent = config.cornerRadius + ' px';
+      updateSelectionMesh();
+    });
+
+    inputFillet.addEventListener('input', (e) => {
+      config.filletRadius = parseInt(e.target.value);
+      valFillet.textContent = config.filletRadius + ' px';
+      updateSelectionMesh();
+    });
+
+    inputBleed.addEventListener('input', (e) => {
+      config.verticalBleed = parseInt(e.target.value);
+      valBleed.textContent = config.verticalBleed + ' px';
+      updateSelectionMesh();
+    });
+
+    toggleAnnotations.addEventListener('change', (e) => {
+      config.showAnnotations = e.target.checked;
+      selectionAnnotationGroup.style.display = config.showAnnotations ? 'block' : 'none';
+      updateSelectionMesh();
+    });
+
+    /**
+     * 模式切换：紧贴文字内容 (wrap) vs 整行通栏撑满 (parent)
+     */
+    function setWidthMode(mode) {
+      config.widthMode = mode;
+      const btnWrap = document.getElementById('btnModeWrap');
+      const btnParent = document.getElementById('btnModeParent');
+
+      if (mode === 'wrap') {
+        btnWrap.className = 'py-1.5 px-3 rounded-md text-xs font-medium transition bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm flex items-center justify-center gap-1.5';
+        btnParent.className = 'py-1.5 px-3 rounded-md text-xs font-medium transition text-slate-400 hover:text-slate-200 flex items-center justify-center gap-1.5';
+      } else {
+        btnParent.className = 'py-1.5 px-3 rounded-md text-xs font-medium transition bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm flex items-center justify-center gap-1.5';
+        btnWrap.className = 'py-1.5 px-3 rounded-md text-xs font-medium transition text-slate-400 hover:text-slate-200 flex items-center justify-center gap-1.5';
+      }
+      updateSelectionMesh();
+    }
+
+    /**
+     * 针对各行提取精确包裹文本内容的选区矩形，彻底避免跨行时 div block 元素撑满整行 (match_parent)
+     */
+    function extractAccurateLineRects(range, containerRect) {
+      const lineElements = Array.from(textLayer.querySelectorAll('.line'));
+      const lineBounds = [];
+
+      for (const lineEl of lineElements) {
+        // 判断当前行是否与选区重合
+        if (!range.intersectsNode(lineEl)) continue;
+
+        const textNodes = getAllTextNodes(lineEl);
+        if (textNodes.length === 0) continue;
+
+        const firstNode = textNodes[0];
+        const lastNode = textNodes[textNodes.length - 1];
+
+        // 构造专门针对当前行文字节点的子选区 subRange
+        const subRange = document.createRange();
+
+        // 确定该行起始点
+        if (lineEl.contains(range.startContainer)) {
+          subRange.setStart(range.startContainer, range.startOffset);
+        } else {
+          subRange.setStart(firstNode, 0);
+        }
+
+        // 确定该行结束点
+        if (lineEl.contains(range.endContainer)) {
+          subRange.setEnd(range.endContainer, range.endOffset);
+        } else {
+          subRange.setEnd(lastNode, lastNode.length);
+        }
+
+        if (subRange.collapsed) continue;
+
+        if (config.widthMode === 'wrap') {
+          // 【紧贴内容模式】：只计算该行文字节点的精确渲染尺寸
+          const rects = subRange.getClientRects();
+          let lineLeft = Infinity;
+          let lineRight = -Infinity;
+          let lineTop = Infinity;
+          let lineBottom = -Infinity;
+
+          for (let i = 0; i < rects.length; i++) {
+            const r = rects[i];
+            if (r.width > 0.2 && r.height > 0.2) {
+              lineLeft = Math.min(lineLeft, r.left - containerRect.left);
+              lineRight = Math.max(lineRight, r.right - containerRect.left);
+              lineTop = Math.min(lineTop, r.top - containerRect.top);
+              lineBottom = Math.max(lineBottom, r.bottom - containerRect.top);
+            }
+          }
+
+          if (lineLeft < lineRight) {
+            lineBounds.push({
+              left: lineLeft,
+              right: lineRight,
+              top: lineTop,
+              bottom: lineBottom,
+              height: lineBottom - lineTop
+            });
+          }
+        } else {
+          // 【通栏模式】：传统编辑器从当前内容起点一直延伸到视口右边界
+          const rects = subRange.getClientRects();
+          let lineLeft = Infinity;
+          let lineTop = Infinity;
+          let lineBottom = -Infinity;
+
+          for (let i = 0; i < rects.length; i++) {
+            const r = rects[i];
+            if (r.width > 0.2) {
+              lineLeft = Math.min(lineLeft, r.left - containerRect.left);
+              lineTop = Math.min(lineTop, r.top - containerRect.top);
+              lineBottom = Math.max(lineBottom, r.bottom - containerRect.top);
+            }
+          }
+
+          const lineBox = lineEl.getBoundingClientRect();
+          lineBounds.push({
+            left: lineLeft !== Infinity ? lineLeft : lineBox.left - containerRect.left,
+            right: containerRect.width - 24, // 延伸至右边界
+            top: lineTop !== Infinity ? lineTop : lineBox.top - containerRect.top,
+            bottom: lineBottom !== -Infinity ? lineBottom : lineBox.bottom - containerRect.top,
+            height: lineBox.height
+          });
+        }
+      }
+
+      // 给每行轻微的水平外扩与垂直融合扩展 (bleed)
+      const padX = config.horizontalPadding;
+      const bleedY = config.verticalBleed;
+
+      for (let i = 0; i < lineBounds.length; i++) {
+        lineBounds[i].left -= padX;
+        lineBounds[i].right += padX;
+        lineBounds[i].top -= bleedY;
+        lineBounds[i].bottom += bleedY;
+      }
+
+      // 消除相邻行之间的垂直缝隙，咬合上下边界
+      for (let i = 0; i < lineBounds.length - 1; i++) {
+        const midY = (lineBounds[i].bottom + lineBounds[i + 1].top) / 2;
+        lineBounds[i].bottom = midY + bleedY;
+        lineBounds[i + 1].top = midY - bleedY;
+      }
+
+      return lineBounds;
+    }
+
+    /**
+     * 遍历排布的行生成顺时针多边形顶点表
+     */
+    function traceMergedPolygonVertices(lines) {
+      if (lines.length === 0) return [];
+      if (lines.length === 1) {
+        // 单行：标准矩形四个顶点
+        const l = lines[0];
+        return [
+          { x: l.left, y: l.top },
+          { x: l.right, y: l.top },
+          { x: l.right, y: l.bottom },
+          { x: l.left, y: l.bottom }
+        ];
+      }
+
+      const points = [];
+      const n = lines.length;
+
+      // 1. 顶行的左上 -> 右上
+      points.push({ x: lines[0].left, y: lines[0].top });
+      points.push({ x: lines[0].right, y: lines[0].top });
+
+      // 2. 顺时针沿右侧边缘向下遍历
+      for (let i = 0; i < n; i++) {
+        const cur = lines[i];
+        if (i < n - 1) {
+          const next = lines[i + 1];
+          // 行底右边缘拐角
+          const stepY = (cur.bottom + next.top) / 2;
+          points.push({ x: cur.right, y: stepY });
+          // 如果下一行比当前行右侧突出或缩进，产生水平折角
+          if (Math.abs(cur.right - next.right) > 2) {
+            points.push({ x: next.right, y: stepY });
+          }
+        } else {
+          // 最后一行右下角
+          points.push({ x: cur.right, y: cur.bottom });
+        }
+      }
+
+      // 3. 底行：右下 -> 左下
+      points.push({ x: lines[n - 1].left, y: lines[n - 1].bottom });
+
+      // 4. 沿左侧边缘向上回溯
+      for (let i = n - 1; i >= 0; i--) {
+        const cur = lines[i];
+        if (i > 0) {
+          const prev = lines[i - 1];
+          const stepY = (cur.top + prev.bottom) / 2;
+          points.push({ x: cur.left, y: stepY });
+          if (Math.abs(cur.left - prev.left) > 2) {
+            points.push({ x: prev.left, y: stepY });
+          }
+        }
+      }
+
+      // 过滤过于接近的重叠冗余点
+      const cleaned = [];
+      for (let i = 0; i < points.length; i++) {
+        const p1 = points[i];
+        const p2 = points[(i + 1) % points.length];
+        const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+        if (dist > 1.5) {
+          cleaned.push(p1);
+        }
+      }
+
+      return cleaned;
+    }
+
+    /**
+     * 判断顶点折角方向（叉积）并为每个拐点生成圆角 / 倒角指令
+     */
+    function generateFilletedSvgPath(vertices) {
+      if (vertices.length < 3) return { pathD: '', annotations: [] };
+
+      const M = vertices.length;
+      const roundedSegments = [];
+      const annotations = [];
+
+      for (let i = 0; i < M; i++) {
+        const prev = vertices[(i - 1 + M) % M];
+        const curr = vertices[i];
+        const next = vertices[(i + 1) % M];
+
+        // 边向量 1 (指向 curr) 与 边向量 2 (curr 指向 next)
+        const v1x = curr.x - prev.x;
+        const v1y = curr.y - prev.y;
+        const v2x = next.x - curr.x;
+        const v2y = next.y - curr.y;
+
+        const len1 = Math.hypot(v1x, v1y);
+        const len2 = Math.hypot(v2x, v2y);
+
+        if (len1 < 0.1 || len2 < 0.1) continue;
+
+        // 叉积计算判断顺逆时针 (顺时针外轮廓中，crossProduct > 0 为凸角外圆角，< 0 为凹角内倒角)
+        const cross = v1x * v2y - v1y * v2x;
+        const isConcave = cross < -0.01; // 凹向内折角 (倒角融合处)
+
+        // 根据内外角类型使用不同的设定半径
+        const targetRadius = isConcave ? config.filletRadius : config.cornerRadius;
+        // 不能超过相邻两边长度的一半
+        const r = Math.min(targetRadius, len1 / 2.05, len2 / 2.05);
+
+        // 圆弧切点起始点 P_start 与结束点 P_end
+        const pStartX = curr.x - (v1x / len1) * r;
+        const pStartY = curr.y - (v1y / len1) * r;
+        const pEndX = curr.x + (v2x / len2) * r;
+        const pEndY = curr.y + (v2y / len2) * r;
+
+        roundedSegments.push({
+          pStart: { x: pStartX, y: pStartY },
+          corner: { x: curr.x, y: curr.y },
+          pEnd: { x: pEndX, y: pEndY },
+          isConcave,
+          r
+        });
+
+        // 记录标注位置
+        annotations.push({
+          x: curr.x,
+          y: curr.y,
+          isConcave,
+          r
+        });
+      }
+
+      if (roundedSegments.length === 0) return { pathD: '', annotations: [] };
+
+      // 拼接 SVG Path
+      let d = `M ${roundedSegments[0].pStart.x.toFixed(1)} ${roundedSegments[0].pStart.y.toFixed(1)}`;
+      for (let i = 0; i < roundedSegments.length; i++) {
+        const seg = roundedSegments[i];
+        // 二阶贝塞尔曲线以原直角折点作为控制点，完美产生等切线圆角 / 倒角
+        d += ` Q ${seg.corner.x.toFixed(1)} ${seg.corner.y.toFixed(1)} ${seg.pEnd.x.toFixed(1)} ${seg.pEnd.y.toFixed(1)}`;
+
+        // 直线连接到下一个拐点的起点
+        const nextSeg = roundedSegments[(i + 1) % roundedSegments.length];
+        d += ` L ${nextSeg.pStart.x.toFixed(1)} ${nextSeg.pStart.y.toFixed(1)}`;
+      }
+      d += ' Z';
+
+      return { pathD: d, annotations };
+    }
+
+    /**
+     * 实时重绘 SVG 选区高亮与标注标记
+     */
+    function updateSelectionMesh() {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        // 无有效选区
+        selectionPathBg.setAttribute('d', '');
+        selectionPathStroke.setAttribute('d', '');
+        selectionAnnotationGroup.innerHTML = '';
+        statLinesCount.textContent = '行数: 0 行';
+        statCharsCount.textContent = '已选: 0 字符';
+        statRectsCount.textContent = '生成多边形节点: 0';
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      const text = selection.toString();
+      const containerRect = editorViewport.getBoundingClientRect();
+
+      // 精确按行提取（贴合文字内容）
+      const lines = extractAccurateLineRects(range, containerRect);
+
+      if (lines.length === 0) {
+        selectionPathBg.setAttribute('d', '');
+        selectionPathStroke.setAttribute('d', '');
+        selectionAnnotationGroup.innerHTML = '';
+        return;
+      }
+
+      // 生成闭合正交多边形
+      const vertices = traceMergedPolygonVertices(lines);
+      // 计算倒角与外圆角贝塞尔曲线
+      const { pathD, annotations } = generateFilletedSvgPath(vertices);
+
+      // 渲染至 SVG 路径
+      selectionPathBg.setAttribute('d', pathD);
+      selectionPathStroke.setAttribute('d', pathD);
+
+      // 统计数据反馈
+      statLinesCount.textContent = `行数: ${lines.length} 行`;
+      statCharsCount.textContent = `已选: ${text.length} 字符`;
+      statRectsCount.textContent = `多边形拐角: ${vertices.length}`;
+
+      // 渲染几何圈注 (针对内倒角高亮)
+      renderAnnotations(annotations);
+    }
+
+    /**
+     * 绘制概念图同款的外圆角与内倒角指示虚线圆环与连线
+     */
+    function renderAnnotations(annotations) {
+      if (!config.showAnnotations) {
+        selectionAnnotationGroup.innerHTML = '';
+        return;
+      }
+
+      let html = '';
+      annotations.forEach((ann, idx) => {
+        if (ann.isConcave) {
+          // 凹角 (内倒角融合处) - 用青色显著标示
+          html += `
+            <g class="annotation-fillet">
+              <circle cx="${ann.x}" cy="${ann.y}" r="${Math.max(14, ann.r + 4)}" 
+                      fill="rgba(56, 189, 248, 0.12)" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="3 3"/>
+              <circle cx="${ann.x}" cy="${ann.y}" r="2.5" fill="#38bdf8"/>
+            </g>
+          `;
+        } else {
+          // 凸角 (外圆角) - 浅灰紫色弱化标示
+          html += `
+            <g class="annotation-corner opacity-70">
+              <circle cx="${ann.x}" cy="${ann.y}" r="${Math.max(8, ann.r)}" 
+                      fill="none" stroke="#818cf8" stroke-width="0.8" stroke-dasharray="2 2"/>
+            </g>
+          `;
+        }
+      });
+
+      selectionAnnotationGroup.innerHTML = html;
+    }
+
+    // 监听原生选择事件
+    document.addEventListener('selectionchange', () => {
+      // 检查当前选择是否在编辑器视口内
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const anchorNode = sel.anchorNode;
+      if (anchorNode && editorViewport.contains(anchorNode)) {
+        updateSelectionMesh();
+      }
+    });
+
+    window.addEventListener('resize', updateSelectionMesh);
+    editorViewport.addEventListener('scroll', updateSelectionMesh);
+
+    /**
+     * 安全获取元素内所有可见文本节点
+     */
+    function getAllTextNodes(root) {
+      const textNodes = [];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.textContent && node.textContent.length > 0) {
+          textNodes.push(node);
+        }
+      }
+      return textNodes;
+    }
+
+    /**
+     * 应用预设选区，确保 Range 节点与 offset 合法安全，防止负数或溢出越界
+     */
+    function applyPreset(type) {
+      window.getSelection().removeAllRanges();
+      const lines = textLayer.querySelectorAll('.line');
+      if (lines.length === 0) return;
+
+      const range = document.createRange();
+
+      try {
+        if (type === 'multi-stair') {
+          // 选择第 13、14、15 行，呈现阶梯交错与平滑倒角融合
+          const line1Nodes = getAllTextNodes(lines[1]); // 行 13
+          const line3Nodes = getAllTextNodes(lines[3]); // 行 15
+          
+          if (line1Nodes.length > 0 && line3Nodes.length > 0) {
+            const startNode = line1Nodes[0];
+            const endNode = line3Nodes[line3Nodes.length - 1];
+            
+            // 安全限制 offset 范围在 [0, node.length] 之间
+            const startOffset = Math.min(2, startNode.length);
+            const endOffset = Math.max(0, endNode.length);
+
+            range.setStart(startNode, startOffset);
+            range.setEnd(endNode, endOffset);
+          }
+        } else if (type === 'code-block') {
+          // 选择函数主体块（第 12 行到第 17 行）
+          const startNodes = getAllTextNodes(lines[0]);
+          const endNodes = getAllTextNodes(lines[5] || lines[lines.length - 1]);
+          
+          if (startNodes.length > 0 && endNodes.length > 0) {
+            const startNode = startNodes[0];
+            const endNode = endNodes[endNodes.length - 1];
+            range.setStart(startNode, 0);
+            range.setEnd(endNode, endNode.length);
+          }
+        } else if (type === 'single-word') {
+          // 单行胶囊
+          const targetSpan = lines[0].querySelector('.text-yellow-300');
+          if (targetSpan) {
+            range.selectNodeContents(targetSpan);
+          }
+        }
+
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        updateSelectionMesh();
+      } catch (err) {
+        console.warn('Preset selection error:', err);
+      }
+    }
+
+    function clearCustomSelection() {
+      window.getSelection().removeAllRanges();
+      updateSelectionMesh();
+    }
+
+    /**
+     * 主题色彩切换
+     */
+    function setSelectionTheme(theme) {
+      config.theme = theme;
+      const gradPrimary = document.getElementById('selectionGradPrimary');
+      const strokeGrad = document.getElementById('selectionStrokeGrad');
+      const glowFilter = document.getElementById('selectionGlow');
+
+      if (theme === 'cyan') {
+        gradPrimary.children[0].setAttribute('stop-color', '#38bdf8');
+        gradPrimary.children[0].setAttribute('stop-opacity', '0.38');
+        gradPrimary.children[1].setAttribute('stop-color', '#2563eb');
+        gradPrimary.children[1].setAttribute('stop-opacity', '0.28');
+
+        strokeGrad.children[0].setAttribute('stop-color', '#7dd3fc');
+        strokeGrad.children[1].setAttribute('stop-color', '#60a5fa');
+        
+        glowFilter.children[0].setAttribute('flood-color', '#38bdf8');
+      } else if (theme === 'purple') {
+        gradPrimary.children[0].setAttribute('stop-color', '#c084fc');
+        gradPrimary.children[0].setAttribute('stop-opacity', '0.38');
+        gradPrimary.children[1].setAttribute('stop-color', '#9333ea');
+        gradPrimary.children[1].setAttribute('stop-opacity', '0.26');
+
+        strokeGrad.children[0].setAttribute('stop-color', '#e879f9');
+        strokeGrad.children[1].setAttribute('stop-color', '#c084fc');
+
+        glowFilter.children[0].setAttribute('flood-color', '#c084fc');
+      } else if (theme === 'emerald') {
+        gradPrimary.children[0].setAttribute('stop-color', '#34d399');
+        gradPrimary.children[0].setAttribute('stop-opacity', '0.38');
+        gradPrimary.children[1].setAttribute('stop-color', '#059669');
+        gradPrimary.children[1].setAttribute('stop-opacity', '0.26');
+
+        strokeGrad.children[0].setAttribute('stop-color', '#6ee7b7');
+        strokeGrad.children[1].setAttribute('stop-color', '#34d399');
+
+        glowFilter.children[0].setAttribute('flood-color', '#34d399');
+      } else if (theme === 'amber') {
+        gradPrimary.children[0].setAttribute('stop-color', '#fbbf24');
+        gradPrimary.children[0].setAttribute('stop-opacity', '0.42');
+        gradPrimary.children[1].setAttribute('stop-color', '#d97706');
+        gradPrimary.children[1].setAttribute('stop-opacity', '0.28');
+
+        strokeGrad.children[0].setAttribute('stop-color', '#fde68a');
+        strokeGrad.children[1].setAttribute('stop-color', '#fbbf24');
+
+        glowFilter.children[0].setAttribute('flood-color', '#fbbf24');
+      }
+      updateSelectionMesh();
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      // 页面初始化时自动激活阶梯多行倒角效果，与设计图一致
+      setTimeout(() => {
+        applyPreset('multi-stair');
+      }, 100);
+    });
+  </script>
+</body>
+</html>
